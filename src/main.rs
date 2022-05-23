@@ -1,3 +1,5 @@
+#![deny(elided_lifetimes_in_paths)]
+
 use std::path::PathBuf;
 use structopt::StructOpt;
 

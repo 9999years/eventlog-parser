@@ -25,7 +25,7 @@ const EVENT_ET_END: &[u8] = b"ete\0";
 type EventId = u16;
 
 #[derive(Debug, Clone)]
-struct EventType {
+pub struct EventType {
     id: EventId,
     size: EventSize,
     description: Vec<u8>,
@@ -33,13 +33,13 @@ struct EventType {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum EventSize {
+pub enum EventSize {
     Constant(u16),
     Variable,
 }
 
 #[derive(Debug, Clone)]
-struct Event {
+pub struct Event {
     ty: EventId,
     /// Nanoseconds
     time: u64,
@@ -95,7 +95,7 @@ fn parse_event_type_inner(input: &[u8]) -> IResult<&[u8], EventType> {
 
 fn parse_events(
     sizes: &HashMap<EventId, EventSize>,
-) -> impl Fn(&[u8]) -> IResult<&[u8], Vec<Event>> + '_ {
+) -> impl for<'a> Fn(&'a [u8]) -> IResult<&'a [u8], Vec<Event>> + '_ {
     move |input| {
         delimited(
             tag(EVENT_DATA_BEGIN),
@@ -107,20 +107,19 @@ fn parse_events(
 
 fn parse_event_inner(
     sizes: &HashMap<EventId, EventSize>,
-) -> impl Fn(&[u8]) -> IResult<&[u8], Event> + '_ {
+) -> impl for<'a> Fn(&'a [u8]) -> IResult<&'a [u8], Event> + '_ {
     move |input| {
         let (rest, (ty, time)) = pair(be_u16, be_u64)(input)?;
 
+        let make_event = |data: &[u8]| {
+                    let data = data.to_owned();
+                    Event { ty, time, data }
+                };
+
         if let Some(event_size) = sizes.get(&ty) {
             match event_size {
-                EventSize::Constant(size) => map(take(*size), |data: &[u8]| {
-                    let data = data.to_owned();
-                    Event { ty, time, data }
-                })(rest),
-                EventSize::Variable => map(length_data(be_u16), |data: &[u8]| {
-                    let data = data.to_owned();
-                    Event { ty, time, data }
-                })(rest),
+                EventSize::Constant(size) => map(take(*size), make_event)(rest),
+                EventSize::Variable => map(length_data(be_u16), make_event)(rest),
             }
         } else {
             panic!("Found event with type {ty}")
@@ -128,7 +127,7 @@ fn parse_event_inner(
     }
 }
 
-pub fn parse_eventlog(input: &[u8]) -> IResult<&[u8], (Vec<EventType>, Vec<Event>)> {
+pub fn parse_eventlog<'a>(input: &'a [u8]) -> IResult<&'a [u8], (Vec<EventType>, Vec<Event>)> {
     let (rest, event_types) = parse_header(input)?;
     let event_sizes: HashMap<_, _> = event_types
         .iter()
