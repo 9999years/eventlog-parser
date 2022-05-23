@@ -7,3 +7,5 @@ edition = "2021"
 
 [dependencies]
 nom = "7.1"
+structopt = "0.3"
+eyre = "0.6"
