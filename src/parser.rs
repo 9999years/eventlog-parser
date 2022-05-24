@@ -1,16 +1,19 @@
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use nom::{
     bytes::complete::tag,
     bytes::complete::take,
     combinator::map,
+    error::{ErrorKind, ParseError},
     multi::length_data,
     multi::many0,
     number::complete::{be_i16, be_u16, be_u32, be_u64},
     sequence::delimited,
     sequence::pair,
     sequence::tuple,
-    IResult,
+    Finish, IResult,
 };
 
 const EVENT_HEADER_BEGIN: &[u8] = b"hdrb";
@@ -26,10 +29,10 @@ type EventId = u16;
 
 #[derive(Debug, Clone)]
 pub struct EventType {
-    id: EventId,
-    size: EventSize,
-    description: Vec<u8>,
-    extra_info: Vec<u8>,
+    pub id: EventId,
+    pub size: EventSize,
+    pub description: Vec<u8>,
+    pub extra_info: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -40,17 +43,17 @@ pub enum EventSize {
 
 #[derive(Debug, Clone)]
 pub struct Event {
-    ty: EventId,
+    pub ty: EventId,
     /// Nanoseconds
-    time: u64,
-    data: Vec<u8>,
+    pub time: u64,
+    pub data: Vec<u8>,
 }
 
 fn parse_header(input: &[u8]) -> IResult<&[u8], Vec<EventType>> {
     delimited(
-        tag(EVENT_HEADER_BEGIN),
+        pair(tag(EVENT_HEADER_BEGIN), tag(EVENT_HET_BEGIN)),
         many0(parse_event_type),
-        tag(EVENT_HEADER_END),
+        pair(tag(EVENT_HET_END), tag(EVENT_HEADER_END)),
     )(input)
 }
 
@@ -105,16 +108,16 @@ fn parse_events(
     }
 }
 
-fn parse_event_inner(
+fn parse_event_inner<'a>(
     sizes: &HashMap<EventId, EventSize>,
-) -> impl for<'a> Fn(&'a [u8]) -> IResult<&'a [u8], Event> + '_ {
+) -> impl Fn(&'a [u8]) -> IResult<&'a [u8], Event> + '_ {
     move |input| {
         let (rest, (ty, time)) = pair(be_u16, be_u64)(input)?;
 
         let make_event = |data: &[u8]| {
-                    let data = data.to_owned();
-                    Event { ty, time, data }
-                };
+            let data = data.to_owned();
+            Event { ty, time, data }
+        };
 
         if let Some(event_size) = sizes.get(&ty) {
             match event_size {
@@ -122,17 +125,24 @@ fn parse_event_inner(
                 EventSize::Variable => map(length_data(be_u16), make_event)(rest),
             }
         } else {
-            panic!("Found event with type {ty}")
+            Err(nom::Err::Error(nom::error::Error::from_error_kind(
+                input,
+                ErrorKind::Tag,
+            )))
+            // panic!("Found event with type {ty}")
         }
     }
 }
 
-pub fn parse_eventlog<'a>(input: &'a [u8]) -> IResult<&'a [u8], (Vec<EventType>, Vec<Event>)> {
+fn parse_eventlog_inner<'a>(input: &'a [u8]) -> IResult<&'a [u8], (Vec<EventType>, Vec<Event>)> {
     let (rest, event_types) = parse_header(input)?;
-    let event_sizes: HashMap<_, _> = event_types
-        .iter()
-        .map(|e| (e.id, e.size))
-        .collect();
+    let event_sizes: HashMap<_, _> = event_types.iter().map(|e| (e.id, e.size)).collect();
     let (rest, events) = parse_events(&event_sizes)(rest)?;
     Ok((rest, (event_types, events)))
+}
+
+pub fn parse_eventlog(
+    input: &[u8],
+) -> Result<(Vec<EventType>, Vec<Event>), nom::error::Error<&[u8]>> {
+    parse_eventlog_inner(input).finish().map(|(_rest, ret)| ret)
 }
